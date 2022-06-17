@@ -1,0 +1,1 @@
+C:\Users\Aditya\Documents\Projects\Rust\snake\target\wasm32-unknown-unknown\release\libsnake.rlib: C:\Users\Aditya\Documents\Projects\Rust\snake\src\lib.rs C:\Users\Aditya\Documents\Projects\Rust\snake\src\random.rs C:\Users\Aditya\Documents\Projects\Rust\snake\src\snake.rs

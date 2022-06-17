@@ -1,102 +1,114 @@
 mod random;
+mod snake;
 
-use std::collections::VecDeque;
+use js_sys::Function;
+use snake::{Direction, SnakeGame};
+use std::{cell::RefCell, rc::Rc};
+use wasm_bindgen::{prelude::*, JsCast, UnwrapThrowExt};
+use web_sys::{window, HtmlDivElement, HtmlElement, KeyboardEvent};
 
-use random::random_range;
+thread_local! {
+  static GAME: Rc<RefCell<SnakeGame>> =
+    Rc::new(RefCell::new(SnakeGame::new(15, 15)));
 
-pub type Position = (usize, usize);
+  static HANDLE_TICK: Closure<dyn FnMut()> = Closure::wrap(Box::new(|| {
+    GAME.with(|game| game.borrow_mut().tick());
+    render();
+  }) as Box<dyn FnMut()>);
 
-#[derive(Debug)]
-pub enum Direction {
-    Top,
-    Right,
-    Bottom,
-    Left,
+  static HANDLE_KEYDOWN: Closure<dyn FnMut(KeyboardEvent)> =
+    Closure::wrap(Box::new(|evt: KeyboardEvent| GAME.with(|game| {
+      let direction = match &evt.key()[..] {
+        "ArrowUp" => Some(Direction::Up),
+        "ArrowRight" => Some(Direction::Right),
+        "ArrowDown" => Some(Direction::Down),
+        "ArrowLeft" => Some(Direction::Left),
+        _ => None,
+      };
+
+      if let Some(direction) = direction {
+        game.borrow_mut().change_direction(direction);
+      }
+    })) as Box<dyn FnMut(KeyboardEvent)>)
 }
 
-#[derive(Debug)]
-pub struct SnakeGame {
-    width: usize,
-    height: usize,
-    snake: VecDeque<Position>,
-    direction: Direction,
-    food: Position,
-    finished: bool,
+#[wasm_bindgen(start)]
+pub fn main() {
+    HANDLE_TICK.with(|tick_closure| {
+        window()
+            .unwrap_throw()
+            .set_interval_with_callback_and_timeout_and_arguments_0(
+                tick_closure.as_ref().dyn_ref::<Function>().unwrap_throw(),
+                200,
+            )
+            .unwrap_throw()
+    });
+
+    HANDLE_KEYDOWN.with(|handle_keydown| {
+        window()
+            .unwrap_throw()
+            .add_event_listener_with_callback(
+                "keydown",
+                handle_keydown.as_ref().dyn_ref::<Function>().unwrap_throw(),
+            )
+            .unwrap_throw();
+    });
+
+    render();
 }
 
-impl SnakeGame {
-    pub fn new(height: usize, width: usize) -> Self {
-        Self {
-            width,
-            height,
-            snake: [((width - 2).max(0), (height / 2).max(0))]
-                .into_iter()
-                .collect(),
-            direction: Direction::Left,
-            food: (2.min(width - 1), height / 2),
-            finished: false,
-        }
-    }
+pub fn render() {
+    GAME.with(|game| {
+        let game = game.borrow();
+        let document = window().unwrap_throw().document().unwrap_throw();
+        let root_container = document
+            .get_element_by_id("root")
+            .unwrap_throw()
+            .dyn_into::<HtmlElement>()
+            .unwrap_throw();
 
-    pub fn change_direction(&mut self, direction: Direction) {
-        match (&self.direction, direction) {
-            (Direction::Top, Direction::Top)
-            | (Direction::Top, Direction::Bottom)
-            | (Direction::Right, Direction::Right)
-            | (Direction::Right, Direction::Left)
-            | (Direction::Bottom, Direction::Top)
-            | (Direction::Bottom, Direction::Bottom)
-            | (Direction::Left, Direction::Right)
-            | (Direction::Left, Direction::Left) => {}
-            (_, direction) => self.direction = direction,
-        }
-    }
+        root_container.set_inner_html("");
 
-    pub fn is_valid(&self, (x, y): Position) -> bool {
-        x < self.width && y < self.height
-    }
+        let width = game.width;
+        let height = game.height;
 
-    pub fn tick(&mut self) {
-        if self.finished && self.snake.len() == 0 {
-            return;
-        }
+        root_container
+            .style()
+            .set_property("display", "inline-grid")
+            .unwrap_throw();
+        root_container
+            .style()
+            .set_property(
+                "grid-template",
+                &format!("repeat({}, auto) / repeat({}, auto)", height, width),
+            )
+            .unwrap_throw();
 
-        let (x, y) = self.snake[0];
-        let new_head = match &self.direction {
-            Direction::Top => (x, y - 1),
-            Direction::Bottom => (x, y + 1),
-            Direction::Left => (x - 1, y),
-            Direction::Right => (x + 1, y),
-        };
+        for y in 0..height {
+            for x in 0..width {
+                let pos = (x, y);
+                let field_element = document
+                    .create_element("div")
+                    .unwrap_throw()
+                    .dyn_into::<HtmlDivElement>()
+                    .unwrap_throw();
 
-        if !self.is_valid(new_head) || self.snake.contains(&new_head) {
-            self.finished = true;
-        } else {
-            if new_head != self.food {
-                self.snake.pop_back();
-            } else {
-                let free_positions = (0..self.height)
-                    .flat_map(|y| (0..self.width).map(move |x| (x,y)))
-                    .filter(|pos| !self.snake.contains(pos))
-                    .collect::<Vec<_>>();
-                
-                if free_positions.is_empty() {
-                    self.finished = true;
-                    return;
-                }
-                self.food = free_positions[random_range(0, free_positions.len())];
+                field_element.set_class_name("field");
+
+                field_element.set_inner_text({
+                    if pos == game.food {
+                        "🍎"
+                    } else if game.snake.get(0) == Some(&pos) {
+                        "❇️"
+                    } else if game.snake.contains(&pos) {
+                        "🟩"
+                    } else {
+                        " "
+                    }
+                });
+
+                root_container.append_child(&field_element).unwrap_throw();
             }
-            self.snake.push_front(new_head);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::SnakeGame;
-
-    #[test]
-    fn test() {
-        println!("{:?}", SnakeGame::new(10, 10));
-    }
+    });
 }
